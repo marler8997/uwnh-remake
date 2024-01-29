@@ -56,41 +56,55 @@ const viewport = @import("viewport.zig");
 // @wasm
 pub const std_options = struct {
     pub const log_level = .info;
-    pub fn logFn(
-        comptime level: std.log.Level,
-        comptime scope: @Type(.EnumLiteral),
-        comptime format: []const u8,
-        args: anytype,
-    ) void {
-        const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
-        log(level.asText() ++ prefix ++ format, args);
-    }
 };
 
-fn log(comptime format: []const u8, args: anytype) void {
-    const writer = std.io.Writer(void, error{}, console_log_write_zig){ .context = {} };
-    writer.print(format, args) catch @panic("console_log_write failed");
-    console_log_flush();
-}
+// @wasm
+pub const os = struct {
+    pub const system = struct {
+        pub const fd_t = u8;
+        pub const STDERR_FILENO = 1;
+        pub const E = std.os.linux.E;
+        pub fn getErrno(r: usize) E {
+            _ = r; // no errors yet
+            return .SUCCESS;
+        }
+        pub fn write(fd: fd_t, buf: [*]const u8, count: usize) usize {
+            if (fd != STDERR_FILENO) @panic("invalid fd");
+
+            var it = std.mem.splitScalar(u8, buf[0 .. count], '\n');
+            var first = true;
+            while (it.next()) |line| {
+                if (first) {
+                    first = false;
+                } else {
+                    console_log_flush();
+                }
+                console_log_write(line.ptr, line.len);
+            }
+            return count;
+        }
+    };
+};
 
 pub fn panic(
     msg: []const u8,
     trace: ?*std.builtin.StackTrace,
     ret_addr: ?usize,
 ) noreturn {
-    log("panic: {s}", .{msg});
+    console_writer.print("panic: {s}\n", .{msg}) catch |e| switch (e) { };
     if (trace) |t| {
-        log("ErrorTrace:", .{});
+        console_writer.writeAll("ErrorTrace:\n") catch |e| switch (e) { };
         std.debug.dumpStackTrace(t.*);
     } else {
-        log("ErrorTrace: <none>", .{});
+        console_writer.writeAll("ErrorTrace: <none>\n") catch |e| switch (e) { };
     }
-    log("StackTrace:", .{});
+    console_writer.writeAll("StackTrace:\n") catch |e| switch (e) { };
     std.debug.dumpCurrentStackTrace(ret_addr);
     while (true) { @breakpoint(); }
 }
 
-fn console_log_write_zig(context: void, bytes: []const u8) !usize {
+const console_writer = std.io.Writer(void, error{}, console_log_write_zig){ .context = {} };
+fn console_log_write_zig(context: void, bytes: []const u8) error{}!usize {
     _ = context;
     console_log_write(bytes.ptr, bytes.len);
     return bytes.len;
